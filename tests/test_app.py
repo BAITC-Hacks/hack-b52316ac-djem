@@ -114,17 +114,17 @@ def test_event_scenario_and_presentation(client):
     scenario=client.get('/api/scenarios/'+r.json()['id'],headers=auth()).json()
     assert scenario['event_id']=='flood'
     assert scenario['forecast']['prediction']['cost_tenge']==6_100_000_000
-    deck=client.post('/api/presentation',json={'title':'<script>alert(1)</script>','plan':plan,'dataset_version':1,'event_id':'flood'}).json()
+    deck=client.post('/api/presentation',headers=auth(),json={'title':'<script>alert(1)</script>','plan':plan,'dataset_version':1,'event_id':'flood'}).json()
     assert deck['html'].count('<section>')==5
     assert '<script>alert(1)</script>' not in deck['html']
     assert '&lt;script&gt;' in deck['html']
     assert '1 500 000 000 ₸' in deck['html']
     assert 'OPENAI_API_KEY' not in deck['html']
-    assert client.post('/api/presentation',json={'plan':plan[:3]}).status_code==422
+    assert client.post('/api/presentation',headers=auth(),json={'plan':plan[:3]}).status_code==422
 
 def test_recommendations_are_valid_and_improve(client):
     plan=[{'measure_id':'M9','district_id':'esil'},{'measure_id':'M11','district_id':'esil'},{'measure_id':'M10','district_id':'esil'},{'measure_id':'M12'},{'measure_id':'M4','district_id':'esil'}]
-    r=client.post('/api/recommendations',json={'plan':plan,'event_id':'snow'}).json()
+    r=client.post('/api/recommendations',headers=auth(),json={'plan':plan,'event_id':'snow'}).json()
     assert r['suggestions']
     for suggestion in r['suggestions']:
         calculated=client.post('/api/forecast',json={'plan':suggestion['plan'],'event_id':'snow'}).json()
@@ -280,3 +280,37 @@ def test_legacy_scenario_migration(client):
     migrated=db.get_scenario(s['id'])
     assert migrated['forecast']==s['forecast']
     assert migrated['owner']=='admin'
+
+
+def test_result_library_persistence_and_isolation(client,monkeypatch):
+    from app import main
+    assert client.get('/api/library').status_code==401
+    client.post('/api/auth/login',json={'username':'admin','password':'admin'})
+    client.post('/api/users',json={'username':'person1','password':'password-one','display_name':'Первый','role':'employee'})
+    client.post('/api/users',json={'username':'person2','password':'password-two','display_name':'Второй','role':'employee'})
+    client.post('/api/auth/logout',json={})
+    client.post('/api/auth/login',json={'username':'person1','password':'password-one'})
+    body={'plan':PLAN,'dataset_version':1,'title':'Мой отчёт'}
+    deck=client.post('/api/presentation',json=body).json()
+    assert deck['result_id']
+    again=client.post('/api/presentation',json=body).json()
+    assert again['result_id']==deck['result_id']
+    entries=client.get('/api/library').json()
+    assert len(entries)==1 and entries[0]['kind']=='presentation'
+    assert 'html' not in entries[0]
+    detail=client.get('/api/library/result/'+deck['result_id']).json()
+    assert detail['html']==deck['html'] and detail['plan']==PLAN
+    assert detail['forecast']['prediction']['score']==pytest.approx(57.236735)
+    async def fake_agent(*args,**kwargs):return {'mode':'openai','answer':'Риски и рекомендации','actions':[]}
+    monkeypatch.setattr(main,'run_agent',fake_agent)
+    client.post('/api/forecast',json={'plan':PLAN,'dataset_version':1,'use_ai':True})
+    client.post('/api/recommendations',json={'plan':PLAN,'dataset_version':1})
+    kinds={r['kind'] for r in client.get('/api/library').json()}
+    assert kinds=={'presentation','analysis','recommendations'}
+    client.post('/api/auth/logout',json={})
+    client.post('/api/auth/login',json={'username':'person2','password':'password-two'})
+    assert client.get('/api/library').json()==[]
+    assert client.get('/api/library/result/'+deck['result_id']).status_code==404
+    client.post('/api/auth/logout',json={})
+    client.post('/api/auth/login',json={'username':'person1','password':'password-one'})
+    assert len(client.get('/api/library').json())==3

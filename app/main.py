@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field
-from . import config, db, accounts
+from . import config, db, accounts, library
 from .model import forecast, calculate
 from .agent import run_agent, execute_tool, READ_TOOLS, WRITE_TOOLS
 from .optimizer import optimize
@@ -261,6 +261,8 @@ async def make_forecast(body: ForecastRequest, request: Request, credentials: HT
                 task.add_done_callback(lambda done: analysis_tasks.pop(cache_key,None))
             result['ai']=await asyncio.shield(analysis_tasks[cache_key])
 
+    if body.use_ai and result.get('ai',{}).get('mode')=='openai':
+        library.save(actor,'analysis','AI-разбор сценария',plan,dataset['version'],body.event_id,{'answer':result['ai']['answer']})
     return result
 
 @app.get('/api/optimize')
@@ -276,7 +278,10 @@ async def best_plan(dataset_version: int | None = None, event_id: str = 'none', 
             if len(solver_cache) >= 20:
                 solver_cache.pop(next(iter(solver_cache)))
             solver_cache[cache_key] = result
-    return {**solver_cache[cache_key], 'dataset_version': version, 'event': event}
+    best=solver_cache[cache_key]
+    if best.get('plan'):
+        library.save(actor,'optimization','Лучший сценарий' if best.get('optimality_proven') else 'Лучший найденный сценарий',best['plan'],version,event_id,{'search':best})
+    return {**best, 'dataset_version': version, 'event': event}
 
 @app.post('/api/event-transition')
 def event_transition(body: ForecastRequest):
@@ -284,18 +289,30 @@ def event_transition(body: ForecastRequest):
     return transition(dataset['data'], plan_json(body.plan), body.event_id)
 
 @app.post('/api/recommendations')
-def recommend(body: ForecastRequest):
+def recommend(body: ForecastRequest, actor=Depends(authenticate)):
     dataset = db.get_dataset(body.dataset_version)
-    return recommendations(dataset['data'], plan_json(body.plan), body.event_id)
+    result=recommendations(dataset['data'], plan_json(body.plan), body.event_id)
+    library.save(actor,'recommendations','Как улучшить план',plan_json(body.plan),dataset['version'],body.event_id,{'recommendations':result})
+    return result
 
 @app.post('/api/presentation')
-def export_presentation(body: PresentationRequest):
+def export_presentation(body: PresentationRequest, actor=Depends(authenticate)):
     dataset = db.get_dataset(body.dataset_version)
     plan = plan_json(body.plan)
     result = scenario_forecast(dataset['data'], plan, False, body.event_id)
     if not result['valid']:
         raise HTTPException(422, result['errors'])
-    return {'filename': 'astana-scenario.html', 'html': presentation(dataset['data'], plan, result, body.title, dataset['version'])}
+    html=presentation(dataset['data'], plan, result, body.title, dataset['version'])
+    result_id=library.save(actor,'presentation',body.title,plan,dataset['version'],body.event_id,{'html':html})
+    return {'filename': 'astana-scenario.html', 'html':html,'result_id':result_id}
+
+@app.get('/api/library')
+def result_library(actor=Depends(authenticate)):
+    return library.list_results(actor)
+
+@app.get('/api/library/{source}/{result_id}')
+def result_detail(source: str,result_id: str,actor=Depends(authenticate)):
+    return library.get_result(actor,source,result_id)
 
 @app.get('/api/datasets/versions')
 def versions():
