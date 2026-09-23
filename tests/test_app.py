@@ -1,0 +1,92 @@
+import json
+import pytest
+from fastapi.testclient import TestClient
+from app import config, db
+from app.main import app
+from app.model import calculate
+from app.agent import execute_tool, run_agent
+from app.optimizer import optimize
+
+PLAN = [{'measure_id':'M2'}, {'measure_id':'M3','district_id':'nura'}, {'measure_id':'M8','district_id':'nura'}, {'measure_id':'M9','district_id':'nura'}, {'measure_id':'M14'}]
+TOKEN = 'test-token-only-not-a-production-secret'
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, 'DATABASE_PATH', tmp_path/'test.sqlite3')
+    monkeypatch.setenv('ADMIN_API_TOKEN', TOKEN)
+    monkeypatch.setenv('OPENAI_API_KEY', '')
+    with TestClient(app) as c:
+        yield c
+
+def auth():
+    return {'Authorization':'Bearer '+TOKEN}
+
+def test_forecast_and_money(client):
+    b=client.get('/api/bootstrap').json()
+    assert b['baseline']['score']==pytest.approx(52.55768)
+    assert b['dataset']['data']['budget_tenge']==10_000_000_000
+    r=client.post('/api/forecast',json={'plan':PLAN}).json()
+    assert r['prediction']['score']==pytest.approx(57.236735)
+    assert r['prediction']['cost_tenge']==9_800_000_000
+    assert r['prediction']['critical']==[]
+    assert client.get('/').status_code==200
+    assert client.get('/static/app.js').status_code==200
+    assert client.get('/.env').status_code==404
+
+def test_constraints(client):
+    for plan in [PLAN[:4], PLAN+[PLAN[0]], [PLAN[0]]*5,
+                 [{'measure_id':m,'district_id':'nura'} for m in ['M3','M5','M7','M8','M13']]]:
+        assert client.post('/api/forecast',json={'plan':plan}).status_code==422
+    p=[{'measure_id':'M1','district_id':'esil'},*PLAN[1:]]
+    assert client.post('/api/forecast',json={'plan':p}).status_code==422
+    assert client.post('/api/forecast',json={'plan':[],'partial':True}).status_code==200
+
+def test_auth_versions_and_scenarios(client):
+    body={'name':'Команда','plan':PLAN,'dataset_version':1}
+    assert client.post('/api/scenarios',json=body).status_code==401
+    s=client.post('/api/scenarios',json=body,headers=auth()).json()
+    change={'patch':{'indicators':{'T1':90}},'expected_version':1}
+    assert client.patch('/api/data/districts/nura',json=change).status_code==401
+    assert client.patch('/api/data/districts/nura',json=change,headers=auth()).status_code==200
+    assert client.patch('/api/data/districts/nura',json=change,headers=auth()).status_code==409
+    old=client.get('/api/scenarios/'+s['id']).json()
+    assert old['forecast']==s['forecast']
+    assert client.get('/api/bootstrap').json()['dataset']['version']==2
+    r=client.post('/api/agent/execute',json={'name':'restore_dataset','arguments':{'version':1,'expected_version':2}},headers=auth())
+    assert r.json()['version']==3
+    assert client.delete('/api/scenarios/'+s['id']+'?expected_revision=99',headers=auth()).status_code==409
+    assert client.delete('/api/scenarios/'+s['id']+'?expected_revision=1',headers=auth()).status_code==200
+    assert len(client.get('/api/audit',headers=auth()).json())==4
+
+def test_agent_permissions_and_missing_key(client):
+    with pytest.raises(ValueError):
+        execute_tool('update_site_settings',{},allow_write=False)
+    assert client.post('/api/agent/chat',json={'message':'Измени заголовок'}).status_code==401
+    answer=client.post('/api/agent/chat',json={'message':'Привет'},headers=auth()).json()
+    assert answer['mode']=='unavailable'
+    assert client.post('/api/forecast',json={'plan':PLAN,'use_ai':True}).status_code==401
+
+def test_solver_reports_incomplete(client):
+    d=db.get_dataset()['data']
+    r=optimize(d,max_evaluations=10)
+    assert not r['optimality_proven']
+    assert r['evaluated']==10
+    assert calculate(d,r['plan'])['valid']
+
+def test_responses_tool_roundtrip(client,monkeypatch):
+    import asyncio, httpx
+    monkeypatch.setenv('OPENAI_API_KEY','fake-key-for-mocked-transport')
+    seen=[]
+    def handler(request):
+        payload=json.loads(request.content); seen.append(payload)
+        if len(seen)==1:
+            return httpx.Response(200,json={'output':[{'type':'function_call','name':'get_city_state','arguments':'{}','call_id':'call_1'}]})
+        assert payload['input'][-1]['type']=='function_call_output'
+        assert payload['input'][-1]['call_id']=='call_1'
+        return httpx.Response(200,json={'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'Данные прочитаны.'}]}]})
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as transport:
+            result=await run_agent('Прочитай данные','admin',False,client=transport)
+            assert result['mode']=='openai'
+            assert result['actions']==[{'tool':'get_city_state','success':True}]
+    asyncio.run(check())

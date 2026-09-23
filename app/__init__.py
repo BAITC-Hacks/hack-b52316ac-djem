@@ -1,0 +1,1 @@
+"""Akim city simulator."""

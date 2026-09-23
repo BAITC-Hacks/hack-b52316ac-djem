@@ -2,8 +2,8 @@
   "schema_version": 1,
   "title": "Аким на 5 часов",
   "currency": "KZT",
-  "tenge_per_unit": 1000000000,
-  "budget_tenge": 100000000000,
+  "tenge_per_unit": 100000000,
+  "budget_tenge": 10000000000,
   "horizon_quarters": 8,
   "required_decisions": 5,
   "max_per_category": 2,
@@ -201,7 +201,7 @@
       "description": "Выделение полос и приоритет движения автобусов. Повышает доступность общественного транспорта и разгружает дороги.",
       "category": "transport",
       "scope": "district",
-      "cost_tenge": 18000000000,
+      "cost_tenge": 1800000000,
       "lag_quarters": 2,
       "effects": {
         "T1": 6,
@@ -214,7 +214,7 @@
       "description": "Адаптивное управление светофорами во всём городе. Снижает задержки и улучшает безопасность движения.",
       "category": "transport",
       "scope": "city",
-      "cost_tenge": 22000000000,
+      "cost_tenge": 2200000000,
       "lag_quarters": 2,
       "effects": {
         "T1": 4,
@@ -227,7 +227,7 @@
       "description": "Расширение линии лёгкого рельсового транспорта в выбранном районе. Сильный эффект на мобильность, но длительный лаг.",
       "category": "transport",
       "scope": "district",
-      "cost_tenge": 30000000000,
+      "cost_tenge": 3000000000,
       "lag_quarters": 4,
       "effects": {
         "T1": 16,
@@ -241,7 +241,7 @@
       "description": "Создание парка или сквера. Увеличивает озеленение, улучшает качество воздуха и безопасность общественных пространств.",
       "category": "ecology",
       "scope": "district",
-      "cost_tenge": 15000000000,
+      "cost_tenge": 1500000000,
       "lag_quarters": 2,
       "effects": {
         "E1": 12,
@@ -255,7 +255,7 @@
       "description": "Перевод частного сектора на более чистое топливо. Улучшает воздух и надёжность коммунальных сервисов.",
       "category": "ecology",
       "scope": "district",
-      "cost_tenge": 25000000000,
+      "cost_tenge": 2500000000,
       "lag_quarters": 3,
       "effects": {
         "E2": 14,
@@ -268,7 +268,7 @@
       "description": "Общегородская программа озеленения и ветрозащитных полос. Умеренный эффект распределяется между всеми районами.",
       "category": "ecology",
       "scope": "city",
-      "cost_tenge": 20000000000,
+      "cost_tenge": 2000000000,
       "lag_quarters": 4,
       "effects": {
         "E1": 5,
@@ -281,7 +281,7 @@
       "description": "Модульное строительство школы и детского сада. Повышает обеспеченность социальной инфраструктурой.",
       "category": "social",
       "scope": "district",
-      "cost_tenge": 24000000000,
+      "cost_tenge": 2400000000,
       "lag_quarters": 3,
       "effects": {
         "S1": 16
@@ -293,7 +293,7 @@
       "description": "Открытие центра семейного здоровья или поликлиники. Улучшает доступность первичной медицинской помощи.",
       "category": "social",
       "scope": "district",
-      "cost_tenge": 20000000000,
+      "cost_tenge": 2000000000,
       "lag_quarters": 3,
       "effects": {
         "S2": 14
@@ -305,7 +305,7 @@
       "description": "Обустройство спортивных пространств во дворах. В учебной модели повышает показатели социальной сферы и безопасности.",
       "category": "social",
       "scope": "district",
-      "cost_tenge": 10000000000,
+      "cost_tenge": 1000000000,
       "lag_quarters": 1,
       "effects": {
         "S1": 3,
@@ -319,7 +319,7 @@
       "description": "Расширение освещения и системы камер. Повышает безопасность улиц и дорожного движения.",
       "category": "safety",
       "scope": "district",
-      "cost_tenge": 12000000000,
+      "cost_tenge": 1200000000,
       "lag_quarters": 1,
       "effects": {
         "B1": 12,
@@ -332,7 +332,7 @@
       "description": "Обустройство переходов и безопасных школьных зон. Улучшает дорожную безопасность, но немного снижает пропускную способность дорог.",
       "category": "safety",
       "scope": "district",
-      "cost_tenge": 10000000000,
+      "cost_tenge": 1000000000,
       "lag_quarters": 1,
       "effects": {
         "B2": 12,
@@ -345,7 +345,7 @@
       "description": "Единая цифровая платформа обработки обращений жителей. Повышает скорость решения обращений во всех районах.",
       "category": "services",
       "scope": "city",
-      "cost_tenge": 14000000000,
+      "cost_tenge": 1400000000,
       "lag_quarters": 1,
       "effects": {
         "C2": 5
@@ -357,7 +357,7 @@
       "description": "Обновление тепло- и водосетей. Повышает надёжность ЖКХ и немного улучшает экологический показатель.",
       "category": "services",
       "scope": "district",
-      "cost_tenge": 28000000000,
+      "cost_tenge": 2800000000,
       "lag_quarters": 4,
       "effects": {
         "C1": 18,
@@ -370,7 +370,7 @@
       "description": "Развитие аварийных бригад и системы раннего оповещения. Повышает надёжность ЖКХ и скорость реакции по всему городу.",
       "category": "services",
       "scope": "city",
-      "cost_tenge": 16000000000,
+      "cost_tenge": 1600000000,
       "lag_quarters": 1,
       "effects": {
         "C1": 5,
