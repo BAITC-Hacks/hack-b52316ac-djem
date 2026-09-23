@@ -20,8 +20,10 @@ fi
 .venv/bin/python - <<'PY'
 import socket
 with socket.socket() as s:
+    # Match Uvicorn's POSIX bind: closed connections in TIME_WAIT must not block restart.
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:s.bind(('0.0.0.0',8080))
-    except OSError:raise SystemExit('Port 8080 is occupied. Run ss -ltnp and check the existing service.')
+    except OSError as exc:raise SystemExit(f'Cannot bind port 8080: {exc}. Run ss -ltnp and check the existing service.')
 PY
 nohup env HOST=0.0.0.0 PORT=8080 .venv/bin/python run.py > logs/app.log 2>&1 &
 echo $! > logs/app.pid
