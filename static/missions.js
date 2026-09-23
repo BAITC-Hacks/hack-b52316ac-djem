@@ -1,0 +1,27 @@
+// Mission objectives adapted from the artur2 UX branch. All scores come from Python.
+export const MISSIONS = {
+ quality: {title:'Поднять качество жизни',eventId:'none',goal:'Повысить городской Score минимум на 2 балла и не увеличить число критических показателей.'},
+ equity: {title:'Сбалансировать районы',eventId:'none',goal:'Повысить минимальный балл района минимум на 2 балла, сохранив городской Score.'},
+ flood: {title:'Подготовиться к паводку',eventId:'flood',goal:'В условиях паводка получить минимум +1 балл к сценарию без решений с тем же резервом бюджета.'}
+};
+export function evaluateMission(id, result, eventId) {
+ const mission=MISSIONS[id], p=result.prediction, base=result.without_decisions||result.fact;
+ if(!mission)return {status:'СЦЕНАРИЙ РАССЧИТАН',kind:'success',note:'Свободный сценарий. Вы можете выбрать миссию для следующего плана.'};
+ if(eventId!==mission.eventId)return {status:'УСЛОВИЯ МИССИИ ИЗМЕНЕНЫ',kind:'warning',success:false,note:'Верните условия «'+(mission.eventId==='flood'?'Весенний паводок':'Обычные условия')+'» для проверки цели.'};
+ const delta=p.score-base.score;
+ const success=id==='quality'?delta>=2-1e-8&&p.critical.length<=base.critical.length:id==='equity'?p.minimum-base.minimum>=2-1e-8&&delta>=-1e-8:delta>=1-1e-8;
+ return {status:success?'ЦЕЛЬ ДОСТИГНУТА':'ЦЕЛЬ ПОКА НЕ ДОСТИГНУТА',kind:success?'success':'pending',success,note:mission.goal};
+}
+export function allocation(data,plan){return data.categories.map((category,index)=>({...category,color:['#087d70','#4f78a8','#db9850','#8b70b6','#39a98e'][index%5],amount:plan.reduce((sum,p)=>{const m=data.measures.find(m=>m.id===p.measure_id);return sum+(m?.category===category.id?m.cost_tenge:0);},0)}));}
+export function summaryHtml({data,plan,result,missionId,eventId,version,aiAnswer,aiMode}, {esc,num,money,short,renderAdvice}) {
+ const outcome=evaluateMission(missionId,result,eventId), p=result.prediction,items=allocation(data,plan),delta=result.decision_delta??result.delta;
+ let cursor=0;const slices=items.filter(x=>x.amount>0).map(x=>{const start=cursor;cursor+=x.amount/(p.cost_tenge||1)*100;return `${x.color} ${start}% ${cursor}%`;}).join(',')||'#e7eef2 0% 100%';
+ const best=[...(result.explanation.contributions||[])].sort((a,b)=>b.delta-a.delta)[0],measure=data.measures.find(m=>m.id===best?.measure_id);
+ const risk=result.explanation.risks.find(s=>!s.startsWith('Это условный'))||'Проверьте распределение эффекта между районами.';
+ return `<div class="session-heading"><div><p class="eyebrow">ИТОГ СЕССИИ</p><h2>${esc(MISSIONS[missionId]?.title||'Ваш городской сценарий')}</h2><p class="caption">Данные v${version} · ${esc(result.event?.name||'Обычные условия')}</p></div><span class="mission-result ${outcome.kind}">${esc(outcome.status)}</span></div>
+ <div class="session-summary-grid"><section class="session-score"><span class="objective-label">ASTANA QUALITY OF LIFE SCORE</span><div class="session-score-value">${num(p.score)}</div><p class="session-score-delta">${delta>=0?'+':''}${num(delta)} от решений в тех же условиях</p><p class="session-goal-note">${esc(outcome.note)}</p><div class="session-stats"><div><span>Инвестиции</span><strong>${money(p.cost_tenge)}</strong></div><div><span>Остаток</span><strong>${money(p.remaining_tenge)}</strong></div><div><span>Критические показатели</span><strong>${p.critical.length}</strong></div><div><span>Минимальный балл района</span><strong>${num(p.minimum)}</strong></div></div></section>
+ <section class="session-allocation"><p class="eyebrow">РАСХОДЫ ПО НАПРАВЛЕНИЯМ</p><h3>Куда направлен бюджет</h3><div class="allocation-layout"><div class="allocation-donut" role="img" aria-label="Расходы по направлениям; точные суммы приведены рядом" style="background:conic-gradient(${slices})"><span><strong>${short(p.cost_tenge)}</strong><small>инвестиции</small></span></div><div class="allocation-legend">${items.map(x=>`<div class="allocation-row"><i style="--allocation-color:${x.color}"></i><span>${esc(x.name)}</span><strong>${money(x.amount)}</strong></div>`).join('')}</div></div></section>
+ <section class="session-insight"><div><p class="eyebrow">НАИБОЛЬШИЙ ЭФФЕКТ</p><h3>${esc(measure?.name||'Комплекс решений')}</h3><p>${best?`Без этой меры Score был бы на ${num(Math.abs(best.delta))} балла ${best.delta>=0?'ниже':'выше'}. Эффекты отдельных мер не складываются.`:'Смотрите расчётные цепочки в деталях плана.'}</p></div><div><p class="eyebrow">КОМПРОМИСС</p><h3>Что требует внимания</h3><p>${esc(risk)}</p></div></section>
+ <section class="session-ai"><strong>${aiMode==='openai'?'Подробный AI-разбор сохранён':aiMode==='pending'?'AI готовит подробный разбор…':'Расчётная модель'}</strong><p>${aiMode==='openai'?'Откройте полный текст с рисками и рекомендациями.':aiMode==='pending'?'Численный итог уже готов. Текст появится автоматически.':'Математический результат готов независимо от доступности внешнего AI.'}</p>${aiAnswer?`<details class="summary-ai-disclosure"><summary>${aiMode==='openai'?'Читать полный AI-разбор':'Статус внешнего AI'}</summary><article class="saved-advice">${renderAdvice(aiAnswer)}</article></details>`:''}</section></div>
+ <div class="session-actions"><button id="session-restart" class="button outline">Новая миссия</button><button id="session-details-toggle" class="button outline" aria-expanded="false">Показать детали плана</button><button id="session-save" class="button soft">Сохранить сценарий</button><button id="session-presentation" class="button dark">Презентация · 5 слайдов</button></div>`;
+}
