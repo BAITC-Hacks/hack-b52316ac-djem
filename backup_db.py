@@ -1,4 +1,4 @@
-"""Consistent SQLite backup, including committed WAL transactions."""
+
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
@@ -12,3 +12,4 @@ if __name__ == '__main__':
     with sqlite3.connect(DATABASE_PATH) as source, sqlite3.connect(target) as destination:
         source.backup(destination)
     print(target)
+"""Consistent SQLite backup, including committed WAL transactions."""
