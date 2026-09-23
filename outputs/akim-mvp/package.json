@@ -1,0 +1,9 @@
+{
+  "name": "akim-na-5-chasov-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Серверный MVP симулятора городского бюджета",
+  "type": "module",
+  "scripts": { "start": "node server.mjs" },
+  "engines": { "node": ">=20" }
+}
