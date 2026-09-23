@@ -140,6 +140,49 @@ def calculate(data, plan, partial=False):
             'category_scores': category_scores, 'cost_tenge': cost, 'remaining_tenge': data['budget_tenge'] - cost,
             'budget_tenge': data['budget_tenge'], 'synergies': synergies}
 
+def score_components(before, after):
+    return {'average': .7 * (after['average'] - before['average']),
+            'minimum': .3 * (after['minimum'] - before['minimum']),
+            'critical': len(before['critical']) - len(after['critical'])}
+
+
+def impact_chains(data, plan, prediction):
+    """Counterfactual effects: keep every other decision and the scenario fixed."""
+    measures = {m['id']: m for m in data['measures']}
+    chains = []
+    for i, item in enumerate(plan):
+        measure = measures[item['measure_id']]
+        before = calculate(data, plan[:i] + plan[i + 1:], True)
+        factor = (8 - measure['lag_quarters']) / 8
+        synergies = [s for s in prediction['synergies'] if measure['id'] in (s['first'], s['second'])]
+        districts = []
+        for original, old, new in zip(data['districts'], before['districts'], prediction['districts']):
+            metrics = []
+            for metric in data['metrics']:
+                key = metric['id']
+                direct = measure['effects'].get(key, 0) * factor if measure['scope'] == 'city' or item.get('district_id') == new['id'] else 0
+                bonus = sum(s['bonus'] for s in synergies if s['district_id'] == new['id'] and s['metric'] == key)
+                a, b = old['indicators'][key], new['indicators'][key]
+                if direct or bonus or abs(b - a) > 1e-9:
+                    metrics.append({'id': key, 'name': metric['name'], 'weight': metric['weight'],
+                                    'before': a, 'after': b, 'delta': b - a,
+                                    'weighted_delta': (b - a) * metric['weight'],
+                                    'direct_effect': direct, 'synergy_effect': bonus,
+                                    'clipped': abs((b - a) - direct - bonus) > 1e-8,
+                                    'critical_removed': a < 40 <= b, 'critical_added': b < 40 <= a})
+            if metrics:
+                districts.append({'id': new['id'], 'name': new['name'], 'before': old['score'],
+                                  'after': new['score'], 'delta': new['score'] - old['score'],
+                                  'population_share': original['population_share'], 'metrics': metrics})
+        chains.append({'measure_id': measure['id'], 'name': measure['name'],
+                       'cost_tenge': measure['cost_tenge'], 'lag_quarters': measure['lag_quarters'],
+                       'realization_factor': factor, 'score_before': before['score'],
+                       'score_after': prediction['score'], 'delta': prediction['score'] - before['score'],
+                       'components': score_components(before, prediction), 'districts': districts,
+                       'synergies': synergies})
+    return chains
+
+
 def forecast(data, plan, partial=False):
     prediction = calculate(data, plan, partial)
     if not prediction['valid']:
@@ -155,7 +198,8 @@ def forecast(data, plan, partial=False):
         m = next(m for m in data['measures'] if m['id'] == item['measure_id'])
         if any(v < 0 for v in m['effects'].values()):
             risks.append(f'У меры «{m["name"]}» есть отрицательные побочные эффекты: проверьте таблицу показателей.')
-    contributions = [{'measure_id': item['measure_id'], 'delta': prediction['score'] - calculate(data, plan[:i] + plan[i + 1:], True)['score']} for i, item in enumerate(plan)]
+    chains = impact_chains(data, plan, prediction)
+    contributions = [{'measure_id': c['measure_id'], 'delta': c['delta']} for c in chains]
     return {'valid': True, 'fact': fact, 'prediction': prediction, 'changes': changes, 'delta': prediction['score'] - fact['score'],
-            'explanation': {'strengths': strengths, 'risks': risks, 'contributions': contributions},
+            'explanation': {'strengths': strengths, 'risks': risks, 'contributions': contributions, 'impact_chains': chains, 'score_components': score_components(fact, prediction), 'attribution_method': 'leave_one_out'},
             'provenance': 'deterministic_case_model', 'horizon_quarters': 8}

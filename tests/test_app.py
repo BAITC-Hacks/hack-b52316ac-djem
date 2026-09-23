@@ -161,3 +161,41 @@ def test_invalid_edits_are_atomic(client):
     assert client.patch('/api/data/districts/nura',json=invalid,headers=auth()).status_code==422
     assert client.get('/api/bootstrap').json()['dataset']==before
     assert client.get('/api/audit',headers=auth()).json()==[]
+
+
+def test_impact_chains_reconcile_and_threshold(client):
+    r = client.post('/api/forecast', json={'plan': PLAN}).json()
+    assert sum(r['explanation']['score_components'].values()) == pytest.approx(r['decision_delta'])
+    for chain in r['explanation']['impact_chains']:
+        assert sum(chain['components'].values()) == pytest.approx(chain['delta'])
+        for district in chain['districts']:
+            assert sum(m['weighted_delta'] for m in district['metrics']) == pytest.approx(district['delta'])
+    m9 = next(c for c in r['explanation']['impact_chains'] if c['measure_id'] == 'M9')
+    s1 = next(m for m in m9['districts'][0]['metrics'] if m['id'] == 'S1')
+    assert s1['before'] == 38
+    assert s1['after'] == 40.625
+    assert s1['critical_removed']
+    assert m9['components']['critical'] == 1
+
+
+def test_impact_synergy_clipping_and_event(client):
+    from copy import deepcopy
+    from app.model import forecast
+    from app.events import scenario_forecast
+    data = client.get('/api/bootstrap').json()['dataset']['data']
+    plan = [{'measure_id': 'M1', 'district_id': 'nura'}, {'measure_id': 'M2'}]
+    r = forecast(data, plan, True)
+    city = next(c for c in r['explanation']['impact_chains'] if c['measure_id'] == 'M2')
+    assert len(city['districts']) == 5
+    nura = next(d for d in city['districts'] if d['id'] == 'nura')
+    assert next(m for m in nura['metrics'] if m['id'] == 'T1')['synergy_effect'] == 2
+    capped = deepcopy(data)
+    next(d for d in capped['districts'] if d['id'] == 'nura')['indicators']['T1'] = 99
+    r = forecast(capped, plan[:1], True)
+    metric = next(m for m in r['explanation']['impact_chains'][0]['districts'][0]['metrics'] if m['id'] == 'T1')
+    assert metric['delta'] == 1 and metric['clipped']
+    r = scenario_forecast(data, plan, True, 'snow')
+    event_delta = r['without_decisions']['score'] - r['fact']['score']
+    assert event_delta + sum(r['explanation']['score_components'].values()) == pytest.approx(r['delta'])
+    empty = forecast(data, [], True)
+    assert empty['explanation']['impact_chains'] == []
