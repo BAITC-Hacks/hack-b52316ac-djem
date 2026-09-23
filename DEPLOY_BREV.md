@@ -4,14 +4,14 @@
 
 ## 1. Перенести файлы с Windows
 
-Самый быстрый способ — передать подготовленный архив `akim-python.zip` из папки `outputs`. Он не содержит `.env`, ключей и рабочей базы.
+Самый быстрый способ — передать подготовленный архив `akim-python-ux-2026-09-23.zip` из папки `outputs`. Он не содержит `.env`, ключей и рабочей базы.
 
 1. Откройте ваш Jupyter: https://jupyter-o237lkzkv.gobrev.dev
-2. В файловом браузере Jupyter нажмите Upload и загрузите `akim-python.zip`.
+2. В файловом браузере Jupyter нажмите Upload и загрузите `akim-python-ux-2026-09-23.zip`.
 3. Откройте Launcher → Terminal. Перейдите в папку, куда загрузили архив (посмотрите `pwd` и `ls`). Выполните:
 
 ```bash
-python3 -m zipfile -e akim-python.zip akim-python
+python3 -m zipfile -e akim-python-ux-2026-09-23.zip akim-python
 cd akim-python
 pwd
 python3 --version
@@ -24,7 +24,7 @@ python3 --version
 ```bash
 brev refresh
 brev ls
-brev copy /path/to/akim-python.zip INSTANCE_NAME:/home/ubuntu/akim-python.zip
+brev copy /path/to/akim-python-ux-2026-09-23.zip INSTANCE_NAME:/home/ubuntu/akim-python-ux-2026-09-23.zip
 brev shell INSTANCE_NAME
 ```
 
