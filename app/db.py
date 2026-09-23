@@ -173,6 +173,8 @@ def save_scenario(name, plan, dataset_version, actor, scenario_id=None, expected
         else:
             before = None; scenario_id = uuid.uuid4().hex
             c.execute('INSERT INTO scenarios(id,name,dataset_version,plan_json,forecast_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)', (scenario_id, name.strip(), dataset_version, dump(plan), dump(result), timestamp, timestamp))
+        if before is None:
+            c.execute('UPDATE scenarios SET owner=? WHERE id=?',(actor,scenario_id))
         after = scenario_record(c.execute('SELECT * FROM scenarios WHERE id=?', (scenario_id,)).fetchone())
         audit(c, actor, 'save_scenario', scenario_id, before, after)
     return after

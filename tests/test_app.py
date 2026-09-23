@@ -49,7 +49,7 @@ def test_auth_versions_and_scenarios(client):
     assert client.patch('/api/data/districts/nura',json=change).status_code==401
     assert client.patch('/api/data/districts/nura',json=change,headers=auth()).status_code==200
     assert client.patch('/api/data/districts/nura',json=change,headers=auth()).status_code==409
-    old=client.get('/api/scenarios/'+s['id']).json()
+    old=client.get('/api/scenarios/'+s['id'],headers=auth()).json()
     assert old['forecast']==s['forecast']
     assert client.get('/api/bootstrap').json()['dataset']['version']==2
     r=client.post('/api/agent/execute',json={'name':'restore_dataset','arguments':{'version':1,'expected_version':2}},headers=auth())
@@ -111,7 +111,7 @@ def test_event_scenario_and_presentation(client):
     body={'name':'Паводок','plan':plan,'dataset_version':1,'event_id':'flood'}
     r=client.post('/api/scenarios',json=body,headers=auth())
     assert r.status_code==201
-    scenario=client.get('/api/scenarios/'+r.json()['id']).json()
+    scenario=client.get('/api/scenarios/'+r.json()['id'],headers=auth()).json()
     assert scenario['event_id']=='flood'
     assert scenario['forecast']['prediction']['cost_tenge']==6_100_000_000
     deck=client.post('/api/presentation',json={'title':'<script>alert(1)</script>','plan':plan,'dataset_version':1,'event_id':'flood'}).json()
@@ -199,3 +199,84 @@ def test_impact_synergy_clipping_and_event(client):
     assert event_delta + sum(r['explanation']['score_components'].values()) == pytest.approx(r['delta'])
     empty = forecast(data, [], True)
     assert empty['explanation']['impact_chains'] == []
+
+
+def test_accounts_roles_workspaces_and_logout(client):
+    assert client.get('/api/dashboard').status_code == 200
+    assert client.get('/api/users').status_code == 401
+    assert client.get('/api/optimize').status_code == 401
+    assert client.post('/api/auth/login',json={'username':'admin','password':'wrong'}).status_code == 401
+    response=client.post('/api/auth/login',json={'username':'admin','password':'admin'})
+    assert response.status_code == 200
+    assert 'HttpOnly' in response.headers['set-cookie']
+    assert client.get('/api/auth/me').json()['role'] == 'admin'
+    assert client.post('/api/users',json={'username':'staff','password':'staff-password','display_name':'Сотрудник','role':'employee'}).status_code == 201
+    assert 'password_hash' not in client.get('/api/users').text
+    with db.connect() as c:
+        assert c.execute("SELECT password_hash FROM users WHERE username='admin'").fetchone()[0] != 'admin'
+    assert client.post('/api/auth/logout',json={}).status_code == 200
+    assert client.get('/api/auth/me').status_code == 401
+    assert client.post('/api/auth/login',json={'username':'staff','password':'staff-password'}).status_code == 200
+    assert client.get('/api/users').status_code == 403
+    assert client.patch('/api/data/districts/nura',json={'patch':{'name':'oops'},'expected_version':1}).status_code == 403
+    assert client.post('/api/agent/chat',json={'message':'Измени бюджет'}).status_code == 403
+    state={'plan':PLAN,'version':1,'eventId':'none','activeView':'planner','aiAnswer':'Сохранённый анализ'}
+    assert client.put('/api/workspace',json={'state':state,'revision':0}).json()['revision'] == 1
+    assert client.put('/api/workspace',json={'state':state,'revision':0}).status_code == 409
+    assert client.get('/api/workspace').json()['state'] == state
+    mine=client.post('/api/scenarios',json={'name':'Мой план','plan':PLAN,'dataset_version':1}).json()
+    assert mine['owner'].startswith('user:')
+    client.post('/api/auth/logout',json={})
+    client.post('/api/auth/login',json={'username':'admin','password':'admin'})
+    client.post('/api/users',json={'username':'staff2','password':'staff-password','display_name':'Другой','role':'employee'})
+    client.post('/api/auth/logout',json={})
+    client.post('/api/auth/login',json={'username':'staff2','password':'staff-password'})
+    assert client.get('/api/scenarios').json()==[]
+    assert client.get('/api/scenarios/'+mine['id']).status_code == 403
+    assert client.delete('/api/scenarios/'+mine['id']+'?expected_revision=1').status_code == 403
+    assert client.get('/api/workspace').json()['state']=={}
+    assert client.post('/api/auth/password',json={'current_password':'staff-password','new_password':'changed-password'}).status_code==200
+    assert client.get('/api/auth/me').status_code==401
+    assert client.post('/api/auth/login',json={'username':'staff2','password':'changed-password'}).status_code==200
+    assert client.put('/api/workspace',json={'state':{},'revision':0},headers={'Origin':'https://evil.example'}).status_code==403
+
+
+def test_accounts_migration_does_not_reset_password(client):
+    from app import accounts
+    with db.connect() as c:c.execute("UPDATE users SET password_hash=? WHERE username='admin'",(accounts.password_hash('changed-password'),))
+    accounts.init_accounts()
+    assert client.post('/api/auth/login',json={'username':'admin','password':'admin'}).status_code==401
+    assert client.post('/api/auth/login',json={'username':'admin','password':'changed-password'}).status_code==200
+
+
+def test_login_rate_limit(client):
+    for _ in range(10):
+        assert client.post('/api/auth/login',json={'username':'admin','password':'wrong'}).status_code==401
+    assert client.post('/api/auth/login',json={'username':'admin','password':'wrong'}).status_code==429
+
+
+def test_cached_ai_is_user_specific(client,monkeypatch):
+    from app import main
+    calls=[]
+    async def fake_agent(message,actor,allow_write,context):
+        calls.append((actor,context))
+        return {'mode':'openai','answer':'Подробный разбор','actions':[]}
+    monkeypatch.setattr(main,'run_agent',fake_agent)
+    body={'plan':PLAN,'dataset_version':1,'use_ai':True}
+    assert client.post('/api/forecast',json=body,headers=auth()).status_code==200
+    assert client.post('/api/forecast',json=body,headers=auth()).json()['ai']['answer']=='Подробный разбор'
+    assert len(calls)==1
+    client.post('/api/auth/login',json={'username':'admin','password':'admin'})
+    assert client.post('/api/forecast',json=body).status_code==200
+    assert len(calls)==2
+    assert not calls[0][0]==calls[1][0]
+
+
+def test_legacy_scenario_migration(client):
+    from app import accounts
+    s=client.post('/api/scenarios',json={'name':'Старый','plan':PLAN,'dataset_version':1},headers=auth()).json()
+    with db.connect() as c:c.execute('ALTER TABLE scenarios DROP COLUMN owner')
+    accounts.init_accounts()
+    migrated=db.get_scenario(s['id'])
+    assert migrated['forecast']==s['forecast']
+    assert migrated['owner']=='admin'

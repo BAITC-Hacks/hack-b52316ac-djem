@@ -11,7 +11,7 @@ function style(feature) {
 }
 function popup(feature) {
   const p=feature.properties, r=latest.changes.find(row=>row.id===p.id);
-  if (!r) return `<strong>${escape(p.name)}</strong><p>Вне учебного датасета. Показатели не рассчитываются.</p>`;
+  if (!r) return `<strong>${escape(p.name)}</strong><p>Показатели для района пока не предоставлены.</p>`;
   const district=latest.prediction.districts.find(d=>d.id===p.id);
   const critical=Object.values(district.indicators).filter(v=>v<40).length;
   return `<div class="district-popup"><strong>${escape(r.name)}</strong><p>Факт: <b>${number(r.before)}</b><br>Прогноз: <b>${number(r.after)}</b><br>Изменение: <b>${r.delta>=0?'+':''}${number(r.delta)}</b><br>Критических показателей: <b>${critical}</b></p><small>Показатели синтетической модели</small></div>`;
@@ -50,7 +50,7 @@ export async function renderBoundaries(map,result,markers) {
     updateLabelVisibility(map);
     const legend=document.querySelector('#district-boundary-legend');
     if(legend&&!legend.childElementCount){
-      geo.features.forEach(feature=>{const button=document.createElement('button');button.type='button';button.className='boundary-legend-item';button.style.setProperty('--district-color',colors[feature.properties.id]);button.textContent=feature.properties.name+(feature.properties.in_dataset?'':' · вне модели');button.onclick=()=>{const polygon=layer.getLayers().find(l=>l.feature.properties.id===feature.properties.id);if(!show){layer.addTo(map);show=true;document.querySelector('.district-map-controls button').setAttribute('aria-pressed','true');}map.fitBounds(polygon.getBounds(),{padding:[20,20],maxZoom:12});polygon.openPopup();};legend.append(button);});
+      geo.features.forEach(feature=>{const button=document.createElement('button');button.type='button';button.className='boundary-legend-item';button.style.setProperty('--district-color',colors[feature.properties.id]);button.textContent=feature.properties.name;button.onclick=()=>{const polygon=layer.getLayers().find(l=>l.feature.properties.id===feature.properties.id);if(!show){layer.addTo(map);show=true;document.querySelector('.district-map-controls button').setAttribute('aria-pressed','true');}map.fitBounds(polygon.getBounds(),{padding:[20,20],maxZoom:12});polygon.openPopup();};legend.append(button);});
     }
   } catch(error) {
     loading=null;
