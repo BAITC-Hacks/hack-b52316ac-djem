@@ -14,6 +14,8 @@ from . import config, db
 from .model import forecast, calculate
 from .agent import run_agent, execute_tool, READ_TOOLS, WRITE_TOOLS
 from .optimizer import optimize
+from .events import EVENTS, event_dataset, scenario_forecast, transition, recommendations
+from .presentation import presentation
 
 @asynccontextmanager
 async def lifespan(app):
@@ -84,12 +86,17 @@ class ForecastRequest(Body):
     dataset_version: int | None = Field(default=None, ge=1)
     partial: bool = False
     use_ai: bool = False
+    event_id: str = Field(default='none', max_length=40)
 
 class ScenarioRequest(Body):
     name: str = Field(min_length=1, max_length=120)
     plan: list[PlanItem] = Field(max_length=5)
     dataset_version: int = Field(ge=1)
     expected_revision: int | None = Field(default=None, ge=1)
+    event_id: str = Field(default='none', max_length=40)
+
+class PresentationRequest(ForecastRequest):
+    title: str = Field(default='План развития Астаны', min_length=1, max_length=120)
 
 class DatasetRequest(Body):
     data: dict[str, Any]
@@ -122,9 +129,10 @@ def health():
     return {'status': 'ok'}
 
 @app.get('/api/bootstrap')
-def bootstrap():
-    dataset = db.get_dataset()
-    return {'dataset': dataset, 'settings': db.get_settings(), 'baseline': calculate(dataset['data'], [], True),
+def bootstrap(dataset_version: int | None = None, event_id: str = 'none'):
+    dataset = db.get_dataset(dataset_version)
+    adjusted, event = event_dataset(dataset['data'], event_id)
+    return {'dataset': {**dataset, 'data': adjusted}, 'event': event, 'events': EVENTS, 'settings': db.get_settings(), 'baseline': calculate(dataset['data'], [], True),
             'llm_configured': bool(config.openai_config()['key']), 'editing_configured': any(len(x) >= 24 for x in config.credentials().values())}
 
 @app.get('/api/auth/me')
@@ -134,7 +142,7 @@ def me(actor=Depends(authenticate)):
 @app.post('/api/forecast')
 async def make_forecast(body: ForecastRequest, credentials: HTTPAuthorizationCredentials | None = Security(security)):
     dataset = db.get_dataset(body.dataset_version)
-    plan = plan_json(body.plan); result = forecast(dataset['data'], plan, body.partial)
+    plan = plan_json(body.plan); result = scenario_forecast(dataset['data'], plan, body.partial, body.event_id)
     if not result['valid']:
         raise HTTPException(422, result['errors'])
     result['dataset_version'] = dataset['version']
@@ -142,21 +150,42 @@ async def make_forecast(body: ForecastRequest, credentials: HTTPAuthorizationCre
         actor = authenticate(credentials)
         if not result['prediction']['complete']:
             raise HTTPException(422, 'AI-анализ доступен для пяти решений.')
-        result['ai'] = await run_agent('Вызови calculate_forecast для переданного плана и версии. Объясни сильные стороны, риски и компромиссы. Не изменяй данные.', actor, False, {'plan': plan, 'dataset_version': dataset['version']})
+        result['ai'] = await run_agent('Вызови calculate_forecast для переданного плана, версии и event_id. Объясни сильные стороны, риски и компромиссы. Вызови suggest_improvements для рекомендаций. Не изменяй данные.', actor, False, {'plan': plan, 'dataset_version': dataset['version'], 'event_id': body.event_id})
     return result
 
 @app.get('/api/optimize')
-async def best_plan(dataset_version: int | None = None):
+async def best_plan(dataset_version: int | None = None, event_id: str = 'none'):
     dataset = db.get_dataset(dataset_version); version = dataset['version']
-    if version not in solver_cache:
+    adjusted, event = event_dataset(dataset['data'], event_id)
+    cache_key = (version, event_id)
+    if cache_key not in solver_cache:
         if solver_lock.locked():
             raise HTTPException(429, 'Поиск уже выполняется. Повторите запрос чуть позже.')
         async with solver_lock:
-            result = await asyncio.to_thread(optimize, dataset['data'])
+            result = await asyncio.to_thread(optimize, adjusted)
             if len(solver_cache) >= 20:
                 solver_cache.pop(next(iter(solver_cache)))
-            solver_cache[version] = result
-    return {**solver_cache[version], 'dataset_version': version}
+            solver_cache[cache_key] = result
+    return {**solver_cache[cache_key], 'dataset_version': version, 'event': event}
+
+@app.post('/api/event-transition')
+def event_transition(body: ForecastRequest):
+    dataset = db.get_dataset(body.dataset_version)
+    return transition(dataset['data'], plan_json(body.plan), body.event_id)
+
+@app.post('/api/recommendations')
+def recommend(body: ForecastRequest):
+    dataset = db.get_dataset(body.dataset_version)
+    return recommendations(dataset['data'], plan_json(body.plan), body.event_id)
+
+@app.post('/api/presentation')
+def export_presentation(body: PresentationRequest):
+    dataset = db.get_dataset(body.dataset_version)
+    plan = plan_json(body.plan)
+    result = scenario_forecast(dataset['data'], plan, False, body.event_id)
+    if not result['valid']:
+        raise HTTPException(422, result['errors'])
+    return {'filename': 'astana-scenario.html', 'html': presentation(dataset['data'], plan, result, body.title, dataset['version'])}
 
 @app.get('/api/datasets/versions')
 def versions():
@@ -192,11 +221,11 @@ def scenario_get(scenario_id: str):
 
 @app.post('/api/scenarios', status_code=201)
 def scenario_create(body: ScenarioRequest, actor=Depends(authenticate)):
-    return db.save_scenario(body.name, plan_json(body.plan), body.dataset_version, actor)
+    return db.save_scenario(body.name, plan_json(body.plan), body.dataset_version, actor, event_id=body.event_id)
 
 @app.put('/api/scenarios/{scenario_id}')
 def scenario_update(scenario_id: str, body: ScenarioRequest, actor=Depends(authenticate)):
-    return db.save_scenario(body.name, plan_json(body.plan), body.dataset_version, actor, scenario_id, body.expected_revision)
+    return db.save_scenario(body.name, plan_json(body.plan), body.dataset_version, actor, scenario_id, body.expected_revision, body.event_id)
 
 @app.delete('/api/scenarios/{scenario_id}')
 def scenario_delete(scenario_id: str, expected_revision: int, actor=Depends(authenticate)):

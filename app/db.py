@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from . import config
 from .model import validate_dataset, forecast
+from .events import scenario_forecast
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -143,6 +144,7 @@ def scenario_record(row):
     if not row:
         raise KeyError('Сценарий не найден.')
     d = dict(row); d['plan'] = json.loads(d.pop('plan_json')); d['forecast'] = json.loads(d.pop('forecast_json'))
+    d['event_id'] = d['forecast'].get('event', {}).get('id', 'none')
     return d
 
 def list_scenarios():
@@ -153,11 +155,11 @@ def get_scenario(scenario_id):
     with connect() as c:
         return scenario_record(c.execute('SELECT * FROM scenarios WHERE id=?', (scenario_id,)).fetchone())
 
-def save_scenario(name, plan, dataset_version, actor, scenario_id=None, expected_revision=None):
+def save_scenario(name, plan, dataset_version, actor, scenario_id=None, expected_revision=None, event_id='none'):
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 120:
         raise ValueError('Название сценария: 1–120 символов.')
     dataset = get_dataset(dataset_version)
-    result = forecast(dataset['data'], plan)
+    result = scenario_forecast(dataset['data'], plan, event_id=event_id)
     if not result['valid']:
         raise ValueError(' '.join(result['errors']))
     timestamp = now()

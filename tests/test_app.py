@@ -90,3 +90,74 @@ def test_responses_tool_roundtrip(client,monkeypatch):
             assert result['mode']=='openai'
             assert result['actions']==[{'tool':'get_city_state','success':True}]
     asyncio.run(check())
+
+def test_events_preserve_shared_data_and_budget(client):
+    original=client.get('/api/bootstrap').json()['dataset']
+    event=client.get('/api/bootstrap?event_id=flood').json()
+    assert event['dataset']['data']['budget_tenge']==8_500_000_000
+    assert event['event']['reserve_tenge']==1_500_000_000
+    assert client.get('/api/bootstrap').json()['dataset']==original
+    assert client.post('/api/forecast',json={'plan':PLAN,'event_id':'flood'}).status_code==422
+    transition=client.post('/api/event-transition',json={'plan':PLAN,'event_id':'flood'}).json()
+    assert transition['removed']==[{'measure_id':'M3','district_id':'nura'}]
+    result=client.post('/api/forecast',json={'plan':transition['plan'],'event_id':'flood','partial':True}).json()
+    assert result['fact']['score']==pytest.approx(52.55768)
+    assert result['prediction']['cost_tenge']<=8_500_000_000
+    assert result['decision_delta']>result['delta']
+    assert client.get('/api/bootstrap?event_id=invented').status_code==422
+
+def test_event_scenario_and_presentation(client):
+    plan=[{'measure_id':'M9','district_id':'nura'},{'measure_id':'M11','district_id':'almaty'},{'measure_id':'M10','district_id':'nura'},{'measure_id':'M12'},{'measure_id':'M4','district_id':'saryarka'}]
+    body={'name':'Паводок','plan':plan,'dataset_version':1,'event_id':'flood'}
+    r=client.post('/api/scenarios',json=body,headers=auth())
+    assert r.status_code==201
+    scenario=client.get('/api/scenarios/'+r.json()['id']).json()
+    assert scenario['event_id']=='flood'
+    assert scenario['forecast']['prediction']['cost_tenge']==6_100_000_000
+    deck=client.post('/api/presentation',json={'title':'<script>alert(1)</script>','plan':plan,'dataset_version':1,'event_id':'flood'}).json()
+    assert deck['html'].count('<section>')==5
+    assert '<script>alert(1)</script>' not in deck['html']
+    assert '&lt;script&gt;' in deck['html']
+    assert '1 500 000 000 ₸' in deck['html']
+    assert 'OPENAI_API_KEY' not in deck['html']
+    assert client.post('/api/presentation',json={'plan':plan[:3]}).status_code==422
+
+def test_recommendations_are_valid_and_improve(client):
+    plan=[{'measure_id':'M9','district_id':'esil'},{'measure_id':'M11','district_id':'esil'},{'measure_id':'M10','district_id':'esil'},{'measure_id':'M12'},{'measure_id':'M4','district_id':'esil'}]
+    r=client.post('/api/recommendations',json={'plan':plan,'event_id':'snow'}).json()
+    assert r['suggestions']
+    for suggestion in r['suggestions']:
+        calculated=client.post('/api/forecast',json={'plan':suggestion['plan'],'event_id':'snow'}).json()
+        assert calculated['valid']
+        assert calculated['prediction']['score']==pytest.approx(suggestion['score'])
+        assert suggestion['score']>r['current_score']
+        assert suggestion['cost_tenge']<=9_000_000_000
+
+def test_agent_event_tools(client):
+    plan=[{'measure_id':'M9','district_id':'nura'},{'measure_id':'M11','district_id':'nura'},{'measure_id':'M10','district_id':'nura'},{'measure_id':'M12'},{'measure_id':'M4','district_id':'saryarka'}]
+    result=execute_tool('calculate_forecast',{'plan':plan,'dataset_version':1,'event_id':'snow'},allow_write=False)
+    assert result['event']['id']=='snow'
+    saved=execute_tool('save_scenario',{'name':'Агент со событием','plan':plan,'dataset_version':1,'event_id':'snow'})
+    assert saved['event_id']=='snow'
+    with pytest.raises(ValueError):
+        execute_tool('edit_data_record',{'collection':'districts','record_id':'nura','patch':[],'expected_version':1,'operation':'update'})
+
+def test_openai_error_does_not_fake_success(client, monkeypatch):
+    import asyncio, httpx
+    monkeypatch.setenv('OPENAI_API_KEY', 'fake-key-for-mocked-transport')
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(429, json={'error':{'type':'rate_limit_error'}}))) as transport:
+            result=await run_agent('Проверь прогноз', 'admin', False, client=transport)
+            assert result['mode']=='fallback'
+            assert result['status']=='api_error'
+            assert result['actions']==[]
+            assert '429' in result['answer']
+    asyncio.run(check())
+    assert client.post('/api/forecast', json={'plan':PLAN}).status_code==200
+
+def test_invalid_edits_are_atomic(client):
+    before=client.get('/api/bootstrap').json()['dataset']
+    invalid={'patch':{'indicators':{'T1':101}}, 'expected_version':before['version']}
+    assert client.patch('/api/data/districts/nura',json=invalid,headers=auth()).status_code==422
+    assert client.get('/api/bootstrap').json()['dataset']==before
+    assert client.get('/api/audit',headers=auth()).json()==[]
